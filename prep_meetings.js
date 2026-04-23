@@ -1,44 +1,29 @@
 #!/usr/bin/env node
 'use strict';
 
-// ─── DEPENDENCIES ─────────────────────────────────────────────────────────────
-// This script uses CoCo's bundled Node.js and keytar from the Google Workspace MCP.
-// Run via:  ~/.snowflake/cortex/.mcp-servers/google-workspace/node prep_meetings.js
-//
-// If CoCo is installed in a non-default location, update the path below:
-const COCO_MCP_DIR = '/Users/' + require('os').userInfo().username +
-  '/.snowflake/cortex/.mcp-servers/google-workspace';
-const keytar = require(COCO_MCP_DIR + '/node_modules/keytar');
-
-const https    = require('https');
-const fs       = require('fs');
-const path     = require('path');
+const keytar = require('/Users/cwalker/.snowflake/cortex/.mcp-servers/google-workspace/node_modules/keytar');
+const https = require('https');
+const fs = require('fs');
+const path = require('path');
 const readline = require('readline');
 const { execSync, spawnSync, spawn } = require('child_process');
-const crypto   = require('crypto');
+const crypto = require('crypto');
 
-// ─── CONFIG — edit these before running ──────────────────────────────────────
-const ME = 'your.name@snowflake.com';       // Your Snowflake email — prep emails go here
-
-const VIP_ATTENDEES = [                     // AE(s) you work with — their meetings get priority
-  'ae.name@snowflake.com'
-];
-
-const MEMORIES_DIR = '/memories';           // CoCo memory directory (usually /memories)
+// ─── CONFIG ────────────────────────────────────────────────────────────────────
+const ME = 'carson.walker@snowflake.com';
+const VIP_ATTENDEES = ['ali.roshanzamir@snowflake.com', 'shaw.liu@snowflake.com'];
+const MEMORIES_DIR = '/memories';
 const SKILL_DIR = path.dirname(__filename);
-const SNOW_CLI        = '/Applications/SnowflakeCLI.app/Contents/MacOS/snow';
-const SNOW_CONNECTION = 'YOUR_CONNECTION';  // `snow connection list` to find yours
-const SNOW_WAREHOUSE  = 'YOUR_WAREHOUSE';   // Warehouse you have access to
-
+const SNOW_CLI = '/Applications/SnowflakeCLI.app/Contents/MacOS/snow';
+const SNOW_CONNECTION = 'SNOWHOUSE';
+const SNOW_WAREHOUSE = 'SNOWADHOC';
 const STATE_FILE = path.join(SKILL_DIR, 'prep_state.json');
 
-// Optional: Google Drive folder IDs for your AEs' account note folders.
-// If you have AE Drive folders with master_notes subfolders, add their IDs here.
-// Format: ['<FOLDER_ID_1>', '<FOLDER_ID_2>']
-// Leave empty to rely only on broad Drive search and /memories fallback.
-const VIP_DRIVE_FOLDER_IDS = [];
+// Drive folder IDs for account notes
+const ALI_FOLDER_ID   = '1GkS8HPr4vlqtwnMvXkkqF0vHtyWdgbx6';
+const SHAW_FOLDER_ID  = '1TBWK0SYOQTg6aar5BACMMZ9ZCOX80Ow7';
 
-// ─── PREP STATE (incremental run tracking) ───────────────────────────────────
+// ─── PREP STATE (incremental run tracking) ────────────────────────────────────
 function computeChecksum(event, externalAttendees) {
   const key = [
     event.summary || '',
@@ -67,7 +52,7 @@ function savePrepState(state) {
   try { fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2)); } catch (e) {}
 }
 
-// ─── OAUTH TOKEN MANAGEMENT ───────────────────────────────────────────────────
+// ─── OAUTH TOKEN MANAGEMENT ────────────────────────────────────────────────────
 async function getAccessToken() {
   const raw = await keytar.getPassword('com.snowflake.cortex.gdrive', 'oauth_tokens');
   if (!raw) throw new Error('No token found in keytar.');
@@ -94,7 +79,7 @@ async function getAccessToken() {
   return tok.access_token;
 }
 
-// ─── HTTP HELPERS ─────────────────────────────────────────────────────────────
+// ─── HTTP HELPERS ──────────────────────────────────────────────────────────────
 function apiGet(hostname, path, token) {
   return new Promise((resolve, reject) => {
     const opts = {
@@ -159,7 +144,7 @@ function apiPatch(hostname, path, body, token) {
   });
 }
 
-// ─── CALENDAR (macOS EventKit) ────────────────────────────────────────────────
+// ─── CALENDAR (macOS EventKit) ─────────────────────────────────────────────────
 function fetchCalendarEvents(weekOffset) {
   const bin = path.join(SKILL_DIR, 'read_cal_week');
   const args = weekOffset > 0 ? ['--next-week'] : [];
@@ -168,7 +153,7 @@ function fetchCalendarEvents(weekOffset) {
   if (result.status !== 0) throw new Error('read_cal_week failed: ' + result.stderr);
   const events = JSON.parse(result.stdout.trim());
   // Fallback: if EventKit returned no attendees, scan description for external emails
-  // (handles organizer-created meetings where attendees can be nil in EventKit)
+  // (handles sync lag and meetings where invites were added outside the guest list)
   const emailRe = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
   for (const ev of events) {
     if (!(ev.attendees || []).length && ev.description) {
@@ -204,7 +189,7 @@ function sortEvents(events) {
     .sort((a, b) => order[a.type] - order[b.type]);
 }
 
-// ─── COMPANY EXTRACTION ──────────────────────────────────────────────────────
+// ─── COMPANY EXTRACTION ─────────────────────────────────────────────────────────
 const STOP_WORDS = new Set(['inc', 'ltd', 'llc', 'corp', 'co', 'the', 'and', 'group', 'lp', 'de', 'by', 'its', 'for']);
 const MEETING_KEYWORDS_RE = /^(QBR|Demo|Review|Discovery|Call|Sync|Meeting|Check-in|Checkin|Workshop|Debrief|Follow.?up|Intro|Introduction|Kickoff|Kick.off|Onboarding|Training|POC|Pilot|Update|Presentation|Chat|Lunch|Coffee|Happy|Hour|Quarterly|Monthly|Weekly|Bi-weekly|1on1|1:1|Session|Consult|Planning|Strategy)$/i;
 const SNOWFLAKE_WORD_RE = /\bsnowflake\b/i;
@@ -212,32 +197,38 @@ const SF_TRAILING_KW_RE = /\s+\b(QBR|Demo|Review|Discovery|Call|Sync|Meeting|Wor
 
 function extractCompanyFromTitle(title) {
   if (!title) return null;
+  // Strip leading status words: "HOLD:", "HOLD -", "Cancelled:", etc.
   const t = title.replace(/^(?:hold|tbd|cancelled?|canceled?)\s*[:–—\-]\s*/i, '').trim();
 
+  // "Snowflake/CompanyName [-topic]" or "Snowflake+CompanyName [-topic]"
   const sfSlashM = t.match(/^snowflake\s*[\/+]\s*([^\-—(]+)/i);
   if (sfSlashM) {
     let c = sfSlashM[1].trim().replace(SF_TRAILING_KW_RE, '').trim();
     if (c && c.length >= 2 && !SNOWFLAKE_WORD_RE.test(c)) return c;
   }
 
+  // "Snowflake x Name - Company" → take what's after the dash
   const sfXM = t.match(/^snowflake\s+x\s+\S[\s\S]*?\s*[-—]\s*(.+)$/i);
   if (sfXM) {
     const c = sfXM[1].trim();
     if (c && !SNOWFLAKE_WORD_RE.test(c)) return c;
   }
 
+  // "... with CompanyName [at end or before dash/pipe]"
   const withM = t.match(/\bwith\s+([A-Za-z0-9][^-|—(]{2,50}?)(?:\s*[-|—(]|\s*$)/i);
   if (withM) {
     const c = withM[1].trim();
     if (c && !SNOWFLAKE_WORD_RE.test(c)) return c;
   }
 
+  // "CompanyName - topic" or "CompanyName | topic"
   const sepM = t.match(/^([A-Za-z0-9 &'.]+?)\s*[-|—]\s*/);
   if (sepM) {
     const c = sepM[1].trim();
     if (c && !MEETING_KEYWORDS_RE.test(c) && !SNOWFLAKE_WORD_RE.test(c)) return c;
   }
 
+  // "CompanyName <meeting keyword>"
   const kwM = t.match(/^([A-Za-z0-9][A-Za-z0-9 &'.]{1,40}?)\s+(?:QBR|Demo|Review|Discovery|Call|Sync|Meeting|Workshop|Debrief|Follow|Intro|Kickoff|Onboarding|Training|POC|Pilot|Presentation|Chat|Quarterly|Monthly|Weekly)\b/i);
   if (kwM) {
     const c = kwM[1].trim();
@@ -293,12 +284,12 @@ function getCompanyInfo(event, externalAttendees) {
   return { displayName, keywords: allKeywords, assumption };
 }
 
-// ─── DRIVE: ACCOUNT FOLDER SEARCH ────────────────────────────────────────────
+// ─── DRIVE: ACCOUNT FOLDER SEARCH ──────────────────────────────────────────────
 async function findAccountFolder(keywords, token) {
   for (const kw of keywords) {
     if (!kw || kw.length < 3) continue;
     const kwSafe = kw.replace(/'/g, "\\'");
-    for (const parentId of VIP_DRIVE_FOLDER_IDS) {
+    for (const parentId of [ALI_FOLDER_ID, SHAW_FOLDER_ID]) {
       const q = `'${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name contains '${kwSafe}' and trashed = false`;
       const params = new URLSearchParams({ q, fields: 'files(id,name,webViewLink)', pageSize: '5' });
       const res = await apiGet('www.googleapis.com', '/drive/v3/files?' + params.toString(), token);
@@ -342,7 +333,7 @@ async function broadDriveSearch(keywords, token) {
 }
 
 async function findDriveNotesForCompany(keywords, token) {
-  // Strategy 1: matching account subfolder in VIP AE Drive folders (if configured)
+  // Strategy 1: matching account subfolder in Ali/Shaw folders
   const folderMatch = await findAccountFolder(keywords, token);
   if (folderMatch) {
     const notesFile = await getNotesFromFolder(folderMatch.folder.id, token);
@@ -377,7 +368,7 @@ async function readDriveFile(file, token) {
   return typeof res.body === 'string' ? res.body : JSON.stringify(res.body);
 }
 
-// ─── MEMORY FILE FALLBACK ─────────────────────────────────────────────────────
+// ─── MEMORY FILE FALLBACK ──────────────────────────────────────────────────────
 function searchMemoryFiles(keywords) {
   try {
     const files = fs.readdirSync(MEMORIES_DIR);
@@ -392,7 +383,7 @@ function searchMemoryFiles(keywords) {
   return null;
 }
 
-// ─── SFDC CONTACT LOOKUP ──────────────────────────────────────────────────────
+// ─── SNOWHOUSE CONTACT LOOKUP ──────────────────────────────────────────────────
 function lookupContactTitles(emails) {
   if (!emails.length) return {};
   try {
@@ -414,12 +405,13 @@ function lookupContactTitles(emails) {
   }
 }
 
-// ─── NOTES PARSING ────────────────────────────────────────────────────────────
+// ─── NOTES PARSING ─────────────────────────────────────────────────────────────
 function parseNotesContent(text) {
   if (!text) return { useCases: null, recentNotes: null, raw: null };
   const lines = text.split('\n').map(l => l.trimEnd());
   const clean = lines.join('\n').replace(/\n{4,}/g, '\n\n\n').trim();
 
+  // Extract use cases / focus section
   let useCases = null;
   const ucIdx = lines.findIndex(l => /use.?case|focus|objective|goal|priority|use case/i.test(l));
   if (ucIdx >= 0) {
@@ -427,6 +419,7 @@ function parseNotesContent(text) {
     useCases = section.trim();
   }
 
+  // Extract recent notes — look for dated entries or the last meaningful block
   let recentNotes = null;
   const dateLineIdx = lines.findLastIndex ? lines.findLastIndex(l => /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}[-\/]\d{2}|\d{1,2}\/\d{1,2})/i.test(l))
     : [...lines].reverse().findIndex(l => /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d{4}[-\/]\d{2}|\d{1,2}\/\d{1,2})/i.test(l));
@@ -436,6 +429,7 @@ function parseNotesContent(text) {
     recentNotes = lines.slice(realIdx).filter(l => l.trim()).slice(0, 15).join('\n').trim();
   }
 
+  // Fallback: first 1200 chars of clean content
   const rawSnippet = clean.length > 1200 ? clean.substring(0, 1200) + '\n[... truncated]' : clean;
 
   return { useCases, recentNotes, raw: rawSnippet };
@@ -517,7 +511,210 @@ ACTION ITEMS:
   });
 }
 
-// ─── AGENDA BUILDER ───────────────────────────────────────────────────────────
+// ─── DYNAMIC AGENDA BUILDER ───────────────────────────────────────────────────
+function detectMeetingType(title) {
+  const t = (title || '').toLowerCase();
+  if (/\bqbr\b|quarterly.?business.?review|exec(utive)?.?review|ebr\b/.test(t)) return 'qbr';
+  if (/\bdemo\b|demonstration/.test(t)) return 'demo';
+  if (/\bdiscovery\b/.test(t)) return 'discovery';
+  if (/\bintro\b|introduction|kick.?off/.test(t)) return 'intro';
+  if (/\bpoc\b|proof.?of.?concept|pilot/.test(t)) return 'poc';
+  if (/\brenewal\b|scoping|commercial|pricing|negotiat/.test(t)) return 'renewal';
+  if (/\bworkshop\b|training|enablement|hands.?on/.test(t)) return 'workshop';
+  if (/\bcheck.?in\b|sync\b|weekly\b|monthly\b|bi.?weekly\b|\b1.?on.?1\b|standup/.test(t)) return 'sync';
+  if (/\barchitect(ure)?\b|deep.?dive|technical.?review/.test(t)) return 'technical';
+  if (/\bfollow.?up\b/.test(t)) return 'followup';
+  return 'general';
+}
+
+function detectAudience(externalAttendees, contactTitles) {
+  const titles = externalAttendees
+    .map(a => ((contactTitles[a.email ? a.email.toLowerCase() : ''] || {}).title || '').toLowerCase())
+    .filter(Boolean);
+  const isExec = titles.some(t => /\bceo\b|\bcto\b|\bcdo\b|\bcoo\b|\bcfo\b|\bciso\b|chief\s|\bpresident\b|\bsvp\b|\bevp\b|\bvp\b|vice.?pres/.test(t));
+  const isTechnical = titles.some(t => /engineer|architect|developer|data\s+sci|analyst|devops|platform|dba|infrastructure/.test(t));
+  const isDirector = titles.some(t => /\bdirector\b|head\s+of|practice\s+lead/.test(t));
+  if (isExec) return 'executive';
+  if (isTechnical && !isDirector) return 'technical';
+  return 'general';
+}
+
+function buildDynamicAgenda(event, topicFromTitle, externalAttendees, contactTitles, aiParsed, notesContent, durationMin) {
+  const title = event.summary || '';
+  const type = detectMeetingType(title);
+  const audience = detectAudience(externalAttendees, contactTitles);
+  const hasNotes = !!notesContent;
+  const hasActionItems = aiParsed && aiParsed.actionItems && !/^•\s*none\.?$/i.test(aiParsed.actionItems.trim());
+
+  // Pull first named use case for agenda specificity
+  const firstUseCase = (() => {
+    if (!aiParsed || !aiParsed.useCases) return null;
+    const m = aiParsed.useCases.match(/^•\s*([^:\n]+):/m);
+    return m ? m[1].trim() : null;
+  })();
+
+  const isShort = durationMin > 0 && durationMin <= 30;
+  const isLong  = durationMin > 0 && durationMin >= 75;
+
+  const t = (min) => isShort ? `${Math.round(min / 2)} min` : isLong ? `${Math.round(min * 1.5)} min` : `${min} min`;
+
+  // Action item review item (injected when prior open items exist)
+  const actionItemStep = hasActionItems
+    ? `Review open action items from last meeting (${t(5)})`
+    : null;
+
+  // Use-case specific demo/technical step
+  const useCaseStep = firstUseCase
+    ? `${firstUseCase} — demo / status update (${t(15)})`
+    : null;
+
+  let steps = [];
+
+  switch (type) {
+    case 'qbr':
+      if (audience === 'executive') {
+        steps = [
+          `Business outcomes review — wins, metrics, progress (${t(10)})`,
+          useCaseStep || `Strategic use case update (${t(15)})`,
+          `Snowflake roadmap & upcoming investments (${t(10)})`,
+          `Partnership priorities + executive asks (${t(10)})`,
+          `Next steps + owners (${t(5)})`
+        ];
+      } else {
+        steps = [
+          `Recap: what's gone well, what hasn't (${t(10)})`,
+          useCaseStep || `Current use case status & blockers (${t(15)})`,
+          `Roadmap / upcoming features relevant to your use cases (${t(10)})`,
+          actionItemStep,
+          `Next steps + owners (${t(5)})`
+        ];
+      }
+      break;
+
+    case 'demo':
+      if (audience === 'executive') {
+        steps = [
+          `Business problem framing — confirm what we're solving (${t(5)})`,
+          useCaseStep || `Demo: ${topicFromTitle} (${t(20)})`,
+          `Business case / value summary (${t(5)})`,
+          `Next steps: POC, pricing, or deeper technical session (${t(5)})`
+        ];
+      } else {
+        steps = [
+          `Architecture / environment overview (${t(5)})`,
+          useCaseStep || `Live demo: ${topicFromTitle} (${t(20)})`,
+          `Technical Q&A + integration questions (${t(10)})`,
+          `POC scoping / next steps (${t(5)})`
+        ];
+      }
+      break;
+
+    case 'discovery':
+      steps = [
+        `Introductions + context (who's who, goals for today) (${t(5)})`,
+        `Current state: data stack, key pain points, team structure (${t(15)})`,
+        `Top priorities for the next 6–12 months (${t(10)})`,
+        `Snowflake fit discussion (${t(5)})`,
+        `Agree on next steps (${t(5)})`
+      ];
+      break;
+
+    case 'intro':
+      steps = [
+        `Introductions — their role, our team, agenda for today (${t(5)})`,
+        `Their current landscape + biggest data challenges (${t(10)})`,
+        `Snowflake overview — relevant to their space (${t(10)})`,
+        `Identify best next step: discovery, demo, or POC (${t(5)})`
+      ];
+      break;
+
+    case 'poc':
+      steps = [
+        `POC status: what's working, what's blocked (${t(10)})`,
+        useCaseStep || `Technical walkthrough / testing: ${topicFromTitle} (${t(20)})`,
+        `Success criteria check — are we on track? (${t(10)})`,
+        `Blockers, open questions, owner assignments (${t(10)})`,
+        `Next milestone + timeline (${t(5)})`
+      ];
+      break;
+
+    case 'renewal':
+      steps = [
+        `Relationship recap — value delivered, key wins (${t(10)})`,
+        `Current usage + expansion opportunities (${t(10)})`,
+        `Commercial discussion: terms, timeline, approvals (${t(15)})`,
+        `Confirm mutual next steps (${t(5)})`
+      ];
+      break;
+
+    case 'workshop':
+      steps = [
+        `Objectives + agenda review (${t(5)})`,
+        `Overview / concepts: ${topicFromTitle} (${t(10)})`,
+        `Hands-on: ${firstUseCase || topicFromTitle} (${t(isLong ? 45 : 25)})`,
+        `Q&A + troubleshooting (${t(10)})`,
+        `Wrap-up: resources + next steps (${t(5)})`
+      ];
+      break;
+
+    case 'sync':
+      steps = [
+        actionItemStep || `Quick wins / updates since last sync (${t(5)})`,
+        `${topicFromTitle !== title ? topicFromTitle : 'Open topics / blockers'} (${t(isShort ? 10 : 15)})`,
+        `Next steps + owners (${t(5)})`
+      ];
+      break;
+
+    case 'technical':
+      steps = [
+        `Problem statement + current architecture (${t(10)})`,
+        useCaseStep || `Deep dive: ${topicFromTitle} (${t(20)})`,
+        `Integration points, edge cases, performance (${t(10)})`,
+        `Recommended approach + trade-offs (${t(10)})`,
+        `Action items + follow-up resources (${t(5)})`
+      ];
+      break;
+
+    case 'followup':
+      steps = [
+        `Review open action items from last meeting (${t(10)})`,
+        useCaseStep || `${topicFromTitle !== title ? topicFromTitle : 'Status update'} (${t(15)})`,
+        `Open questions + blockers (${t(10)})`,
+        `Agree on next steps + owners (${t(5)})`
+      ];
+      break;
+
+    default: // general
+      if (!hasNotes) {
+        steps = [
+          `Introductions + context recap (${t(5)})`,
+          `Current priorities and pain points (${t(15)})`,
+          `Snowflake capabilities relevant to their use cases (${t(10)})`,
+          `Next steps (${t(5)})`
+        ];
+      } else if (audience === 'executive') {
+        steps = [
+          `Relationship update + wins since last meeting (${t(5)})`,
+          useCaseStep || `Strategic use case status (${t(15)})`,
+          actionItemStep,
+          `Executive asks / roadmap alignment (${t(10)})`,
+          `Next steps + owners (${t(5)})`
+        ];
+      } else {
+        steps = [
+          `Context recap + relationship update (${t(5)})`,
+          useCaseStep || `${topicFromTitle !== title ? topicFromTitle : 'Review current use cases / status'} (${t(15)})`,
+          actionItemStep,
+          `Technical follow-up / demo / Q&A (${t(10)})`,
+          `Next steps + action items (${t(5)})`
+        ];
+      }
+  }
+
+  return steps.filter(Boolean);
+}
+
+// ─── AGENDA BUILDER ────────────────────────────────────────────────────────────
 function formatDateTime(event) {
   if (!event.start || !event.start.dateTime) return 'All Day';
   const start = new Date(event.start.dateTime);
@@ -556,6 +753,7 @@ function buildAgenda(event, externalAttendees, companyInfo, noteResult, notesCon
   const dateStr = formatDateTime(event);
   const meetingLink = getMeetingLink(event);
 
+  // Original meeting description (agenda already in the invite)
   const originalDesc = (event.description || '')
     .replace(/=== PRE-CALL PREP[\s\S]*?=== END PREP ===/g, '').trim();
 
@@ -579,10 +777,21 @@ function buildAgenda(event, externalAttendees, companyInfo, noteResult, notesCon
     !a.email.toLowerCase().includes('resource.calendar')
   );
 
+  // Derive meeting topic from title
   const topicFromTitle = (() => {
     const t = title.replace(/^[^-|—]+[-|—]\s*/, '').trim();
     return t && t !== title ? t : title;
   })();
+
+  // Compute duration for agenda timing hints
+  const durationMin = (() => {
+    if (event.start && event.start.dateTime && event.end && event.end.dateTime) {
+      return Math.round((new Date(event.end.dateTime) - new Date(event.start.dateTime)) / 60000);
+    }
+    return 60;
+  })();
+
+  const agendaSteps = buildDynamicAgenda(event, topicFromTitle, externalAttendees, contactTitles, aiParsed, notesContent, durationMin);
 
   const assumptions = [companyInfo.assumption].filter(Boolean);
   if (!notesContent && noteResult && noteResult.method === 'folder-empty') {
@@ -625,19 +834,17 @@ function buildAgenda(event, externalAttendees, companyInfo, noteResult, notesCon
     recentNotes ? `  RECENT SE NOTES:\n${recentNotes.split('\n').map(l => '    ' + l).join('\n')}` : (raw ? `  NOTES EXCERPT:\n${raw.split('\n').slice(0,10).map(l => '    ' + l).join('\n')}` : `  NOTES: —`),
     ``,
     `SUGGESTED PREP AGENDA:`,
-    `  1. Context recap / relationship update (5 min)`,
-    `  2. ${topicFromTitle !== title ? topicFromTitle : 'Review current use cases / status'} (15 min)`,
-    `  3. Technical follow-up / demo / Q&A (10 min)`,
-    `  4. Next steps + action items (5 min)`,
+    ...agendaSteps.map((s, i) => `  ${i + 1}. ${s}`),
+    (agendaSteps.length === 0) ? `  1. Context recap / update (5 min)` : null,
     ``,
     assumptions.length ? `ASSUMPTIONS / NOTES:\n${assumptions.map(a => '  ' + a).join('\n')}` : null,
     ``,
     `SOURCE: ${sourceRef}`,
-    `Prep generated: ${new Date().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })}`,
+    `Prep generated: ${new Date().toLocaleString('en-CA', { dateStyle: 'medium', timeStyle: 'short' })}`,  
     `=== END PREP ===`
   ].filter(l => l !== null).join('\n');
 
-  // ─── HTML (email) ────────────────────────────────────────────────────────────
+  // ─── HTML (Gmail draft) ──────────────────────────────────────────────────────
   const htmlBody = `
 <div style="font-family:Arial,sans-serif;max-width:720px;padding:20px;color:#222;">
   <h2 style="color:#29B5E8;border-bottom:2px solid #29B5E8;padding-bottom:8px;margin-top:0;">
@@ -696,10 +903,7 @@ function buildAgenda(event, externalAttendees, companyInfo, noteResult, notesCon
 
   <h3 style="color:#444;margin-bottom:4px;">Suggested Prep Agenda</h3>
   <ol style="margin-top:4px;">
-    <li>Context recap / relationship update <em>(5 min)</em></li>
-    <li>${escHtml(topicFromTitle !== title ? topicFromTitle : 'Review current use cases and status')} <em>(15 min)</em></li>
-    <li>Technical follow-up / demo / Q&amp;A <em>(10 min)</em></li>
-    <li>Next steps + action items <em>(5 min)</em></li>
+    ${agendaSteps.map(s => `<li>${escHtml(s)}</li>`).join('\n    ')}
   </ol>
 
   ${assumptions.length ? `
@@ -718,7 +922,7 @@ function buildAgenda(event, externalAttendees, companyInfo, noteResult, notesCon
   return { plainText, htmlBody, title, dateStr };
 }
 
-// ─── CONSOLIDATED SUMMARY EMAIL ───────────────────────────────────────────────
+// ─── CONSOLIDATED SUMMARY EMAIL ────────────────────────────────────────────────
 function buildConsolidatedEmail(weekLbl, meetingDataArr, aiParsedArr, contactTitles) {
   const hasNone = (s) => !s || /^•\s*none\.?$/i.test(s.trim());
 
@@ -787,17 +991,17 @@ function buildConsolidatedEmail(weekLbl, meetingDataArr, aiParsedArr, contactTit
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;max-width:720px;padding:20px;color:#222">
   <h2 style="color:#0070D2;border-bottom:2px solid #0070D2;padding-bottom:8px;margin-top:0">Pre-call Prep Summary</h2>
   <p style="color:#666;margin:0 0 24px;font-size:13px">${escHtml(weekLbl)} &nbsp;·&nbsp; Generated ${new Date().toLocaleDateString('en-CA')}<br>
-  <em style="font-size:12px">★ = AE meeting &nbsp;·&nbsp; Sorted highest to lowest priority &nbsp;·&nbsp; Full agendas written to each calendar event</em></p>
+  <em style="font-size:12px">★ = Ali/Shaw meeting &nbsp;·&nbsp; Sorted highest to lowest priority &nbsp;·&nbsp; Full agendas written to each calendar event</em></p>
   ${cards}
 </div>`;
 }
 
-// ─── EMAIL (SMTP XOAUTH2) ─────────────────────────────────────────────────────
+// ─── GMAIL DRAFT ───────────────────────────────────────────────────────────────
 function buildMimeRaw(subject, htmlBody) {
   const boundary = 'BOUNDARY_' + Date.now();
   const mime = [
     `To: ${ME}`,
-    `From: Snowflake SE <${ME}>`,
+    `From: Carson Walker <${ME}>`,
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
@@ -822,7 +1026,7 @@ function sendEmailViaSMTP(subject, htmlBody, token) {
     const authStr = Buffer.from(`user=${ME}\x01auth=Bearer ${token}\x01\x01`).toString('base64');
     const boundary = 'BOUNDARY_' + Date.now();
     const message = [
-      `From: Snowflake SE <${ME}>`,
+      `From: Carson Walker <${ME}>`,
       `To: ${ME}`,
       `Subject: ${subject}`,
       'MIME-Version: 1.0',
@@ -863,7 +1067,7 @@ function sendEmailViaSMTP(subject, htmlBody, token) {
   });
 }
 
-// ─── CALENDAR UPDATE (EventKit Swift binary) ──────────────────────────────────
+// ─── CALENDAR UPDATE (EventKit Swift binary) ───────────────────────────────────
 function updateCalendarDescriptionLocal(eventId, _calName, currentDesc, newPrepText) {
   const original = currentDesc
     ? currentDesc.replace(/=== PRE-CALL PREP[\s\S]*?=== END PREP ===/g, '').trim()
@@ -876,7 +1080,7 @@ function updateCalendarDescriptionLocal(eventId, _calName, currentDesc, newPrepT
   return { status: 200 };
 }
 
-// ─── WEEK LABEL ───────────────────────────────────────────────────────────────
+// ─── WEEK LABEL ────────────────────────────────────────────────────────────────
 function weekLabel(weekOffset) {
   const now = new Date();
   const day = now.getDay();
@@ -886,7 +1090,7 @@ function weekLabel(weekOffset) {
   return monday.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }) + ' week';
 }
 
-// ─── MAIN ─────────────────────────────────────────────────────────────────────
+// ─── MAIN ──────────────────────────────────────────────────────────────────────
 async function main(weekOffset) {
   const label = weekOffset > 0 ? 'NEXT WEEK' : 'THIS WEEK';
   console.log(`\nSE Meeting Prep - ${weekLabel(weekOffset)} (${label})`);
@@ -926,7 +1130,7 @@ async function main(weekOffset) {
 
   for (const { event, type } of sorted) {
     const title = event.summary || 'Untitled Meeting';
-    const label2 = type.includes('vip') ? '[AE]' : '[Customer]';
+    const label2 = type.includes('vip') ? '[Ali/Shaw]' : '[Customer]';
     console.log(`Processing: ${title} ${label2}`);
 
     const externalAttendees = (event.attendees || []).filter(a =>
@@ -937,6 +1141,7 @@ async function main(weekOffset) {
     console.log(`  Account: ${companyInfo.displayName}${companyInfo.assumption ? ' *' : ''}`);
     if (companyInfo.assumption) console.log(`  ! ${companyInfo.assumption}`);
 
+    // Determine if this meeting needs prep (new, changed, or no existing prep)
     const checksum = computeChecksum(event, externalAttendees);
     const stored = prepState[event.id];
     const hasPrep = (event.description || '').includes('=== PRE-CALL PREP');
@@ -995,7 +1200,7 @@ async function main(weekOffset) {
   console.log(`\n${toUpdateCount} meeting(s) need prep, ${skippedCount} already up to date.`);
 
   if (toUpdateCount === 0) {
-    console.log('Nothing to update — posting refreshed summary email only.\n');
+    console.log('Nothing to update — posting refreshed summary draft only.\n');
   }
 
   // ── Phase 2: Parallel Cortex summarization (new/changed meetings only) ──────
@@ -1018,8 +1223,8 @@ async function main(weekOffset) {
     });
   }
 
-  // ── Phase 3: Update calendars (new/changed only), build consolidated email ───
-  console.log('\nPhase 3: Updating calendars and building summary email...\n');
+  // ── Phase 3: Update calendars (new/changed only), build consolidated draft ───
+  console.log('\nPhase 3: Updating calendars and building summary draft...\n');
 
   for (let i = 0; i < meetingDataArr.length; i++) {
     const { event, type, externalAttendees, companyInfo, noteResult, notesContent, needsUpdate, checksum, meetingStatus } = meetingDataArr[i];
@@ -1043,6 +1248,7 @@ async function main(weekOffset) {
       else console.log(`  ${companyInfo.displayName}: Calendar update failed (${res.status}):`, res.error || '');
     } catch (e) { console.log(`  ${companyInfo.displayName}: Calendar error: ${e.message}`); }
 
+    // Save to state on success
     if (calOk || calSkipped) {
       prepState[event.id] = {
         checksum,
@@ -1054,15 +1260,15 @@ async function main(weekOffset) {
     }
 
     const statusLabel = meetingStatus === 'new' ? '[NEW]' : meetingStatus.startsWith('changed') ? '[UPDATED]' : '[OK]';
-    const calStatus = calOk ? '' : calSkipped ? ' (email only)' : ' (cal failed)';
+    const calStatus = calOk ? '' : calSkipped ? ' (Gmail only)' : ' (cal failed)';
     results.push({ title, dateStr, type, status: statusLabel + calStatus, company: companyInfo.displayName, meetingStatus });
   }
 
   savePrepState(prepState);
 
-  // Post consolidated summary email (only meetings at or after run time)
+  // Post consolidated summary draft (only meetings at or after run time)
   const updatedCount = results.filter(r => r.status !== '[SKIPPED]').length;
-  console.log(`\nPosting consolidated summary email (${updatedCount} updated, ${skippedCount} unchanged)...`);
+  console.log(`\nPosting consolidated summary draft (${updatedCount} updated, ${skippedCount} unchanged)...`);
   const wLabel = weekLabel(weekOffset);
   const now = Date.now();
   const futureMeetingIdxs = meetingDataArr.map((m, i) => {
@@ -1077,7 +1283,7 @@ async function main(weekOffset) {
     const draft = await createGmailDraft(summarySubject, consolidatedHtml, token);
     if (draft.id) console.log(`  Summary email sent to inbox: ${draft.id}`);
     else console.log('  Summary email failed:', JSON.stringify(draft).substring(0, 80));
-  } catch (e) { console.log('  Summary email error:', e.message); }
+  } catch (e) { console.log('  Summary draft error:', e.message); }
 
   console.log('\n' + '='.repeat(60));
   console.log('SUMMARY');
@@ -1087,17 +1293,18 @@ async function main(weekOffset) {
     const change = r.meetingStatus && r.meetingStatus.startsWith('changed:') ? ` (${r.meetingStatus.slice(8)})` : '';
     console.log(`${star}${r.status}${change} ${r.title} — ${r.company} (${r.dateStr})`);
   }
-  console.log('\n* = AE meeting (prioritized)');
+  console.log('\n* = Ali/Shaw meeting (prioritized)');
   console.log('[NEW] = first time prepped   [UPDATED] = meeting changed   [SKIPPED] = no changes since last run');
-  console.log('Email: Sent to your inbox');
+  console.log('Drafts: Gmail → Drafts folder');
   console.log('Calendar: Open each event to see the updated description');
 }
 
-// ─── ENTRY POINT ──────────────────────────────────────────────────────────────
+// ─── ENTRY POINT ───────────────────────────────────────────────────────────────
 (async () => {
   try {
     await main(0);
 
+    // Ask about next week
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     rl.question('\nRun prep for NEXT WEEK too? (y/n): ', async (answer) => {
       rl.close();
@@ -1110,7 +1317,7 @@ async function main(weekOffset) {
   } catch (err) {
     console.error('\nERROR:', err.message);
     if (err.message.includes('Calendar')) {
-      console.error('Fix: Ensure your email is in System Settings > Internet Accounts with Calendars enabled');
+      console.error('Fix: Ensure carson.walker@snowflake.com is in System Settings > Internet Accounts with Calendars enabled');
     }
     process.exit(1);
   }
