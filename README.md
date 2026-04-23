@@ -13,7 +13,8 @@ Runs every week (or on demand via Cortex Code) and for every external/customer m
 3. **Searches Google Drive** for your `*master_notes*` files for the company, then falls back to `/memories/*.md`
 4. **Writes the prep agenda in two places:**
    - An **email to yourself** (sent directly via SMTP) — formatted HTML with attendee table, account context, and suggested agenda
-   - The **calendar event description** — plain text, prepended below the original Zoom/Meet link so nothing is lost
+   - The **calendar event description** — plain text, written directly into the event so you see the prep when you open the meeting in any calendar app
+5. **Tracks changes between runs** — if a meeting moves, an attendee is added, or the title changes, the next run detects it and re-preps automatically
 
 Nothing is ever sent to customers or attendees.
 
@@ -191,6 +192,22 @@ External attendee titles come from `FIVETRAN.SALESFORCE.CONTACT`, queried via th
 
 **Name your notes files like:** `YourInitials_CompanyName_Master_Notes` — Google Docs work best (exported as plain text automatically).
 
+### Calendar description updates and change detection
+
+Each meeting prep is written directly into the calendar event description so it's visible whenever you open the event — in Google Calendar, macOS Calendar, or your phone. The original invite text (Zoom link, organizer notes) is preserved above the prep block and never modified.
+
+The script tracks a checksum of each meeting's key fields between runs:
+
+| Change detected | What happens |
+|---|---|
+| New meeting (never prepped) | Full prep generated, calendar updated |
+| Meeting time moved | Re-prep triggered automatically |
+| Attendee added or removed | Re-prep triggered automatically |
+| Title renamed | Re-prep triggered automatically |
+| No changes | Skipped — calendar untouched, still included in summary email |
+
+This means you can run `prep my meetings` multiple times during the week and only changed meetings get re-processed. The consolidated summary email always reflects the current state of all upcoming meetings.
+
 ---
 
 ## File structure
@@ -230,10 +247,11 @@ After compiling, the binaries `read_cal_week` and `update_cal_event` live in the
 - All prep stays **private to you** — emails go to your own inbox only, calendar updates use `sendUpdates=none`
 - No customer data leaves Snowflake internal systems
 - OAuth token stored in macOS Keychain via CoCo's Google Workspace MCP
-- Snowhouse queries run under your own `snow` CLI credentials
+- Snowflake queries run under your own `snow` CLI credentials
 
 ---
 
 ## Author
 
-Built by the Snowflake SE community. Contributions welcome — open a PR or issue on GitHub.
+Carson Walker — Sr. Solutions Engineer, Snowflake Canada
+[GitHub: sfc-gh-CWALKER](https://github.com/sfc-gh-CWALKER)
