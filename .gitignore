@@ -1,0 +1,12 @@
+# Compiled Swift binaries (machine-specific — rebuild via setup.sh)
+read_cal_week
+update_cal_event
+
+# Incremental state file (contains personal meeting data)
+prep_state.json
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/

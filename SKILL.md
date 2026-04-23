@@ -3,9 +3,9 @@ name: se-meeting-prep
 description: |
   Weekly meeting prep for SE calendar. Reads Google Calendar for the current week,
   identifies customer meetings (prioritizing your VIP AE meetings), looks up
-  attendee job titles from Snowhouse SFDC, searches Google Drive for master_notes
+  attendee job titles from Snowflake SFDC, searches Google Drive for master_notes
   files, and writes a structured pre-call agenda in two places:
-    1. A Gmail draft to yourself — easy to review and edit before the meeting
+    1. An email to yourself (sent via SMTP) — easy to review before the meeting
     2. The calendar event description — original content preserved at top
 
   Triggers: meeting prep, prep my meetings, weekly prep, calendar prep,
@@ -32,9 +32,9 @@ Run the main script:
 
 1. Reads your Google Calendar (Mon–Sun) via macOS EventKit binaries
 2. Filters to external/customer meetings + VIP AE meetings
-3. Looks up attendee job titles from Snowhouse FIVETRAN.SALESFORCE.CONTACT
+3. Looks up attendee job titles from Snowflake SFDC via Snow CLI
 4. Searches Google Drive for *master_notes* files, falls back to /memories/*.md
-5. Creates a Gmail draft to yourself with a formatted HTML prep agenda
+5. Sends an email to yourself with a formatted HTML prep agenda
 6. Updates each calendar event description (original content preserved at top)
 
 ## Requirements
@@ -42,6 +42,6 @@ Run the main script:
 - macOS with Google Calendar synced (System Settings → Internet Accounts → Google)
 - Terminal granted Full Calendar Access (System Settings → Privacy → Calendars)
 - Cortex Code with Google Workspace MCP configured
-- Snowflake CLI (`snow`) with a Snowhouse connection
+- Snowflake CLI (`snow`) with a connection configured
 
 See README.md and agents.md for full setup instructions.

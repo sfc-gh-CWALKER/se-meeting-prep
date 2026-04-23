@@ -26,7 +26,7 @@ echo "✓ CoCo Node found: $NODE"
 SNOW_CLI="/Applications/SnowflakeCLI.app/Contents/MacOS/snow"
 if [ ! -f "$SNOW_CLI" ]; then
   echo "WARNING: Snowflake CLI not found at $SNOW_CLI"
-  echo "  Contact title lookup from Snowhouse SFDC will be skipped."
+  echo "  Contact title lookup from SFDC will be skipped."
   echo "  Install Snowflake CLI from: https://docs.snowflake.com/en/user-guide/snowflake-cli"
 else
   echo "✓ Snowflake CLI found"

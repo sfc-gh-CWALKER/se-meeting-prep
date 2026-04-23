@@ -65,9 +65,9 @@ cp read_cal_week update_cal_event ~/.snowflake/cortex/skills/se-meeting-prep/
 
 ---
 
-## Contact Title Lookup: Snowhouse SFDC
+## Contact Title Lookup: Snowflake SFDC
 
-External attendee job titles come from Snowhouse:
+External attendee job titles come from Snowflake:
 
 ```sql
 SELECT LOWER(EMAIL) AS EMAIL, NAME, NULLIF(TITLE,'') AS TITLE
@@ -76,7 +76,7 @@ WHERE LOWER(EMAIL) IN (...)
 QUALIFY ROW_NUMBER() OVER (PARTITION BY LOWER(EMAIL) ORDER BY NULLIF(TITLE,'') DESC NULLS LAST) = 1
 ```
 
-Called once per run via `snow sql --connection YOUR_CONNECTION --warehouse YOUR_WAREHOUSE --format json`. Falls back silently (titles blank) if Snowhouse is unavailable.
+Called once per run via `snow sql --connection YOUR_CONNECTION --warehouse YOUR_WAREHOUSE --format json`. Falls back silently (titles blank) if unavailable.
 
 Coverage: ~88% of customer contacts in SFDC have a resolvable title.
 
@@ -115,11 +115,12 @@ Falls back to `/memories/*.md` if no Drive file is found.
 
 ---
 
-## Gmail Draft Format
+## Email Format
 
 - **To / From:** Your own email (set `ME` in CONFIG)
 - **Subject:** `Pre-call Prep - {Meeting Title} - {Day Mon D}` (ASCII only)
 - **Body:** HTML with Snowflake blue (#29B5E8) styling, attendee table (Name | Title | Email | Company), account context, suggested agenda
+- **Delivery:** Sent directly via Gmail SMTP XOAUTH2 (port 465) — arrives in your inbox, not Drafts
 
 ---
 
@@ -159,10 +160,15 @@ Falls back to `/memories/*.md` if no Drive file is found.
 ## OAuth Scopes Required (Google Workspace MCP)
 
 These scopes are already present if you've set up the Google Workspace MCP in CoCo:
-- `https://mail.google.com/` — create Gmail drafts
+- `https://mail.google.com/` — send email via SMTP XOAUTH2
 - `https://www.googleapis.com/auth/drive` — search Drive for notes
 
 Calendar is handled by EventKit, not OAuth — no calendar scope needed.
+
+The script reads the OAuth token from macOS Keychain using `KEYCHAIN_SERVICE` and
+`KEYCHAIN_ACCOUNT` constants defined at the top of `prep_meetings.js`. These are
+Keychain lookup identifiers set by CoCo when you authorize the Google Workspace MCP.
+To find your values: `security find-generic-password -a oauth_tokens 2>/dev/null | grep svce`
 
 ---
 

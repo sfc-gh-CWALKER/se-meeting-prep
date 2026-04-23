@@ -9,10 +9,10 @@ A **Cortex Code skill** for Snowflake Solutions Engineers that auto-generates st
 Runs every week (or on demand via Cortex Code) and for every external/customer meeting:
 
 1. **Reads your Google Calendar** for the current Mon–Sun via macOS EventKit (no Google Calendar API needed)
-2. **Looks up external attendees** in Snowhouse SFDC (`FIVETRAN.SALESFORCE.CONTACT`) to get their job titles
+2. **Looks up external attendee job titles** from Snowflake SFDC (`FIVETRAN.SALESFORCE.CONTACT`) via Snow CLI
 3. **Searches Google Drive** for your `*master_notes*` files for the company, then falls back to `/memories/*.md`
 4. **Writes the prep agenda in two places:**
-   - A **Gmail draft to yourself** — formatted HTML with attendee table, account context, and suggested agenda
+   - An **email to yourself** (sent directly via SMTP) — formatted HTML with attendee table, account context, and suggested agenda
    - The **calendar event description** — plain text, prepended below the original Zoom/Meet link so nothing is lost
 
 Nothing is ever sent to customers or attendees.
@@ -34,8 +34,8 @@ EXTERNAL ATTENDEES:
   Bob Lee | Senior Data Architect | bob.lee@acme.com | acme
 
 SNOWFLAKE TEAM:
-  Ali Roshanzamir | ali.roshanzamir@snowflake.com
-  Carson Walker | carson.walker@snowflake.com
+  Your AE | ae.name@snowflake.com
+  You | your.name@snowflake.com
 
 ACCOUNT CONTEXT:
   Use cases: Cortex Search, data sharing with partners...
@@ -59,7 +59,7 @@ SUGGESTED AGENDA:
 | **Google Calendar synced to macOS** | System Settings → Internet Accounts → Google → Calendars ✓ |
 | **Calendar Full Access granted to Terminal** | System Settings → Privacy & Security → Calendars → Terminal → Full Access |
 | **Snowflake CLI (`snow`)** | `/Applications/SnowflakeCLI.app` — comes with CoCo |
-| **Snowhouse connection** | Any Snowflake connection with access to `FIVETRAN.SALESFORCE.CONTACT` |
+| **Snowflake connection** | Any Snowflake connection with access to `FIVETRAN.SALESFORCE.CONTACT` (optional — falls back gracefully) |
 | **Google Drive master_notes files** | Optional — files named like `CW_Acme_Master_Notes` |
 
 ---
@@ -83,6 +83,7 @@ const VIP_ATTENDEES = [                          // AEs you work with — their 
   'ae.one@snowflake.com',
   'ae.two@snowflake.com'
 ];
+const VIP_DRIVE_FOLDER_IDS = [];                 // Optional: Google Drive folder IDs for AE account folders
 const SNOW_CONNECTION = 'YOUR_CONNECTION_NAME';  // Your snow CLI connection name (snow connection list)
 const SNOW_WAREHOUSE  = 'YOUR_WAREHOUSE';        // A warehouse you can use
 ```
@@ -165,9 +166,9 @@ The Google Calendar API is disabled in Snowflake's GCP OAuth project. CalDAV is 
 - `read_cal_week` — reads Mon–Sun events from the local EventKit store, outputs JSON (~0.1 sec)
 - `update_cal_event <eventId>` — writes a new event description via stdin, syncs silently to Google Calendar within ~30 sec
 
-### Contact title lookup: Snowhouse SFDC
+### Contact title lookup: Snowflake SFDC
 
-External attendee titles come from `FIVETRAN.SALESFORCE.CONTACT` in Snowhouse, queried via the `snow sql` CLI. One batch query covers all external emails for the week. ~88% of customer contacts resolve to a name + title.
+External attendee titles come from `FIVETRAN.SALESFORCE.CONTACT`, queried via the `snow sql` CLI. One batch query covers all external emails for the week. ~88% of customer contacts resolve to a name + title.
 
 ### Notes enrichment: Google Drive → memory fallback
 
@@ -212,7 +213,7 @@ After compiling, the binaries `read_cal_week` and `update_cal_event` live in the
 
 ## Privacy & security
 
-- All prep stays **private to you** — drafts go to your own inbox, calendar updates use `sendUpdates=none`
+- All prep stays **private to you** — emails go to your own inbox only, calendar updates use `sendUpdates=none`
 - No customer data leaves Snowflake internal systems
 - OAuth token stored in macOS Keychain via CoCo's Google Workspace MCP
 - Snowhouse queries run under your own `snow` CLI credentials
@@ -221,5 +222,4 @@ After compiling, the binaries `read_cal_week` and `update_cal_event` live in the
 
 ## Author
 
-Carson Walker — Solutions Engineer, Canada Growth  
-[GitHub: sfc-gh-CWALKER](https://github.com/sfc-gh-CWALKER)
+Built by the Snowflake SE community. Contributions welcome — open a PR or issue on GitHub.
