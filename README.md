@@ -170,12 +170,26 @@ The Google Calendar API is disabled in Snowflake's GCP OAuth project. CalDAV is 
 
 External attendee titles come from `FIVETRAN.SALESFORCE.CONTACT`, queried via the `snow sql` CLI. One batch query covers all external emails for the week. ~88% of customer contacts resolve to a name + title.
 
-### Notes enrichment: Google Drive → memory fallback
+### Notes enrichment: Google Drive → memory → title-only fallback
 
-For each customer company (derived from email domain), the script:
-1. Searches Drive for `*master_notes*{company}*` files
-2. If none found, checks `/memories/*.md` for a file containing the company name
-3. Extracts use case context and key notes from the first match
+**You don't need notes for the tool to be useful.** The script searches for context in order and stops at the first hit:
+
+| Step | What it searches | Requires |
+|---|---|---|
+| 1 | Account subfolders inside `VIP_DRIVE_FOLDER_IDS` for a matching folder + `master_notes` file | `VIP_DRIVE_FOLDER_IDS` configured |
+| 2 | Broad Drive search: files with `master_notes` + company name in the filename | Any Drive file named like `YourName_Acme_Master_Notes` |
+| 3 | `/memories/*.md` files containing the company name | CoCo memory files from past sessions |
+| 4 | **No notes found** — prep still runs | Nothing required |
+
+**What you get at each level:**
+
+- **With notes** (steps 1–3): Cortex AI synthesizes recent SE notes, active use cases, and open action items. The agenda references specific use cases by name and injects an action item review step when open items exist.
+
+- **With SFDC titles only** (step 4, Snowflake connection configured): You still get a fully populated attendee table with names and job titles, an audience-aware agenda (executive vs. technical path), and a discovery-oriented flow for new accounts.
+
+- **With nothing** (no notes, no SFDC, no Snowflake connection): You still get the attendee list from your calendar, company name inferred from the meeting title or email domain, and a relevant suggested agenda based on the meeting type (QBR, Demo, Intro, POC, etc.) detected from the title.
+
+**Name your notes files like:** `YourInitials_CompanyName_Master_Notes` — Google Docs work best (exported as plain text automatically).
 
 ---
 

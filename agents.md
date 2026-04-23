@@ -96,20 +96,36 @@ VIP AEs are configured in `VIP_ATTENDEES` in the CONFIG block.
 
 ---
 
-## Drive Notes Search
+## Notes Enrichment: Search Strategy & Fallback Levels
 
-Searches Google Drive for:
+The script searches for account context in order and stops at the first hit. **The tool runs and produces useful prep at every level — notes are optional.**
+
+### Search order
+
+1. **VIP AE Drive folders** (`VIP_DRIVE_FOLDER_IDS`): looks for a subfolder matching the company name, then finds a `master_notes` file inside it. Requires `VIP_DRIVE_FOLDER_IDS` to be configured with folder IDs.
+
+2. **Broad Drive search**: searches your entire Drive for files with `master_notes` + company name in the filename (e.g. `CW_Acme_Master_Notes`). Works with no extra config as long as files are named correctly.
+
+3. **CoCo memory files**: checks `/memories/*.md` for any file containing the company name. Useful for accounts you've researched or captured notes for via CoCo chat.
+
+4. **Title + attendees only**: if nothing is found, prep still runs — uses meeting title, attendee names, and SFDC job titles to build a relevant agenda.
+
+### What you get at each level
+
+| Context available | What the prep includes |
+|---|---|
+| Notes + SFDC titles | AI-synthesized recent SE notes, named use cases, open action items, attendee titles, audience-aware agenda with use case references |
+| SFDC titles only | Full attendee table with names and job titles, executive vs. technical agenda path, discovery-oriented flow for new accounts |
+| Title + attendees only | Attendee list from calendar, company name from title/domain, meeting-type agenda (QBR → business review; Demo → demo flow; Discovery → current state questions; etc.) |
+
+### Naming your notes files
+
 ```
-name contains 'master_notes' AND name contains '{company}' AND trashed = false
+YourInitials_CompanyName_Master_Notes   ← Google Doc (exported as plain text)
+YourInitials_CompanyName_Master_Notes   ← .docx, .txt also supported
 ```
 
-Company is derived from the first external attendee's email domain:
-- `john@acme.com` → `acme`
-- `alice@opencare.com` → `opencare`
-
-**Name your notes files like:** `YourInitials_CompanyName_Master_Notes`
-
-Google Docs are exported as plain text. Other files are read via media download.
+Google Docs export cleanly as plain text. `.docx` files download via binary media. Spreadsheets export as CSV.
 
 Falls back to `/memories/*.md` if no Drive file is found.
 
